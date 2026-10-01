@@ -1,0 +1,300 @@
+# ============================================================
+# Vision Attribute Pipeline — Docker Compose
+# ============================================================
+# Services:
+#   infrastructure: redis, etcd, minio, milvus
+#   pipeline: camera_ingestor, detector_worker, attribute_worker, storage_worker
+#   api: api_server
+#
+# Start infrastructure only (dev mode):
+#   docker compose up redis etcd minio milvus -d
+#
+# Start full stack:
+#   docker compose up -d
+#
+# Scale workers:
+#   docker compose up --scale attribute_worker=2 --scale storage_worker=2 -d
+# ============================================================
+
+networks:
+  vap-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  minio-data:
+  etcd-data:
+  milvus-data:
+  thumbnail-data:
+  log-data:
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: vap-redis
+    restart: unless-stopped
+    command: >
+      sh -c 'exec redis-server
+      $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}
+      --maxmemory 4gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --appendonly yes
+      --appendfsync everysec'
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - vap-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Milvus dependencies
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: vap-etcd
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: >
+      etcd
+      -advertise-client-urls=http://127.0.0.1:2379
+      -listen-client-urls=http://0.0.0.0:2379
+      --data-dir=/etcd
+    volumes:
+      - etcd-data:/etcd
+    networks:
+      - vap-net
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-13T19-46-17Z
+    container_name: vap-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    command: minio server /minio_data --console-address ":9001"
+    ports:
+      - "9001:9001"
+    volumes:
+      - minio-data:/minio_data
+    networks:
+      - vap-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: vap-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "${MILVUS_PORT:-19530}:19530"
+      - "9091:9091"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - vap-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+      start_period: 60s
+
+  # ── Pipeline Services ────────────────────────────────────────────────────
+
+  # Camera ingestor — reads RTSP/video streams
+  # Override CAMERA_SOURCES in .env to specify your cameras
+  camera_ingestor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vap-ingestor
+    restart: unless-stopped
+    command: >
+      python -m pipeline.camera_ingestor
+      --config /app/config/config.yaml
+      --cameras ${CAMERA_SOURCES:-test:/app/test_data/sample.mp4}
+    environment:
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+    volumes:
+      - ./config:/app/config:ro
+      - ./test_data:/app/test_data:ro
+      - log-data:/tmp/vap_logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vap-net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # Detector worker — YOLOv8 + BoT-SORT
+  detector_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      python -m pipeline.detector_worker
+      --config /app/config/config.yaml
+      --worker-id ${HOSTNAME:-01}
+    environment:
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ./config:/app/config:ro
+      - ./models:/app/models:ro
+      - log-data:/tmp/vap_logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vap-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+
+  # Attribute worker — OSNet ReID + PAR
+  attribute_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      python -m pipeline.attribute_worker
+      --config /app/config/config.yaml
+      --worker-id ${HOSTNAME:-01}
+    environment:
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ./config:/app/config:ro
+      - ./models:/app/models
+      - thumbnail-data:/tmp/thumbnails
+      - log-data:/tmp/vap_logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vap-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+
+  # Storage worker — Milvus writes + alerting
+  storage_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      python -m pipeline.storage_worker
+      --config /app/config/config.yaml
+      --worker-id ${HOSTNAME:-01}
+    environment:
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+    volumes:
+      - ./config:/app/config:ro
+      - log-data:/tmp/vap_logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    networks:
+      - vap-net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ── API Server ────────────────────────────────────────────────────────────
+
+  api_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vap-api
+    restart: unless-stopped
+    command: >
+      python -m api.api_server
+      --config /app/config/config.yaml
+      --host 0.0.0.0
+      --port 8000
+      --workers 4
+    environment:
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+      VAP_CONFIG: /app/config/config.yaml
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./config:/app/config:ro
+      - ./models:/app/models:ro
+      - thumbnail-data:/tmp/thumbnails:ro
+      - log-data:/tmp/vap_logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    networks:
+      - vap-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 4G

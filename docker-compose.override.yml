@@ -1,0 +1,81 @@
+# ============================================================
+# docker-compose.override.yml — Local Development Overrides
+# ============================================================
+# This file is automatically merged with docker-compose.yml when
+# running `docker compose up` locally.
+#
+# It mounts source code as volumes (so edits take effect without rebuild)
+# and exposes extra ports for debugging.
+#
+# Production deployments should NOT use this file.
+# ============================================================
+
+version: "3.9"
+
+services:
+
+  camera_ingestor:
+    volumes:
+      - ./pipeline:/app/pipeline   # Live code mount
+      - ./config:/app/config
+    environment:
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: text
+
+  detector_worker:
+    volumes:
+      - ./pipeline:/app/pipeline
+      - ./config:/app/config
+    environment:
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: text
+
+  attribute_worker:
+    volumes:
+      - ./pipeline:/app/pipeline
+      - ./config:/app/config
+    environment:
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: text
+    # Expose Prometheus metrics port for local scraping
+    ports:
+      - "9101:9101"
+
+  storage_worker:
+    volumes:
+      - ./pipeline:/app/pipeline
+      - ./config:/app/config
+    environment:
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: text
+    ports:
+      - "9102:9102"
+
+  api_server:
+    volumes:
+      - ./api:/app/api
+      - ./pipeline:/app/pipeline
+      - ./search:/app/search
+      - ./config:/app/config
+    environment:
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: text
+      API_DEV_MODE: "true"
+    command: >
+      python -m api.api_server
+      --config /app/config/config.yaml
+      --host 0.0.0.0
+      --port 8000
+      --workers 1
+      --reload
+
+  # Expose Redis for local CLI access
+  redis:
+    ports:
+      - "6379:6379"
+
+  # Expose Milvus for local debugging
+  milvus:
+    ports:
+      - "19530:19530"
+      - "9091:9091"

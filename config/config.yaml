@@ -1,0 +1,174 @@
+# ============================================================
+# Vision Attribute Pipeline — Central Configuration
+# ============================================================
+
+# ── Redis ────────────────────────────────────────────────────
+redis:
+  host: ${REDIS_HOST:-localhost}
+  port: ${REDIS_PORT:-6379}
+  password: ${REDIS_PASSWORD:-}
+  db: 0
+  # Stream names (message queues)
+  streams:
+    raw_frames:      "stream:raw_frames"
+    person_crops:    "stream:person_crops"
+    enriched:        "stream:enriched_detections"
+    alerts:          "stream:alerts"
+  # Consumer group names
+  groups:
+    detector:   "group:detector"
+    attribute:  "group:attribute"
+    storage:    "group:storage"
+  # Max stream length (backpressure)
+  max_len: 5000
+  # Embedding cache TTL (seconds) — prevents reprocessing same track in burst
+  embed_cache_ttl: 30
+
+# ── Milvus ───────────────────────────────────────────────────
+milvus:
+  host: ${MILVUS_HOST:-localhost}
+  port: ${MILVUS_PORT:-19530}
+  collection: "person_detections"
+  # ReID embedding dimension (OSNet x1.0 → 512)
+  reid_dim: 512
+  # HNSW index params (tuned for <1ms query at 10M vectors)
+  index_type: "HNSW"
+  index_params:
+    M: 32
+    efConstruction: 200
+  search_params:
+    ef: 128
+  # Vector metric
+  metric_type: "IP"          # Inner product (cosine on L2-normed vecs)
+  # Data retention — 7 days in seconds
+  ttl_seconds: 604800
+  # Consistency for real-time queries
+  consistency_level: "Strong"
+
+# ── Models ───────────────────────────────────────────────────
+models:
+  # YOLOv8 person detector
+  yolo:
+    weights: "yolov8x.pt"    # auto-downloaded by ultralytics
+    conf_threshold: 0.40
+    iou_threshold: 0.45
+    device: "cuda:0"
+    half: true               # FP16 on T4/A10G
+    imgsz: 640
+    classes: [0]             # 0 = person
+
+  # BoT-SORT tracker (built into ultralytics)
+  tracker:
+    type: "botsort"          # botsort.yaml — best accuracy
+    reid_model: null         # We use our own OSNet for ReID, not BoT's
+
+  # OSNet AIN x1.0 — person ReID embeddings (512-dim)
+  reid:
+    model_name: "osnet_ain_x1_0"
+    weights_path: "models/osnet_ain_x1_0_market1501.pth"
+    device: "cuda:0"
+    input_size: [256, 128]   # H x W
+    batch_size: 32
+
+  # PromptPAR — Pedestrian Attribute Recognition
+  # from OpenPAR (Event-AHU/OpenPAR, IEEE TCSVT 2024)
+  par:
+    backend: "promptpar"     # "promptpar" | "clip_fallback"
+    weights_path: "models/promptpar_pa100k.pth"
+    backbone: "swin_b"
+    input_size: [224, 224]
+    batch_size: 16
+    device: "cuda:0"
+    half: true
+    # Attributes to extract (subset of PA100K + PETA)
+    attributes:
+      - "gender"
+      - "age_group"
+      - "upper_color"
+      - "lower_color"
+      - "upper_type"
+      - "lower_type"
+      - "hair_length"
+      - "glasses"
+      - "hat"
+      - "bag_type"
+      - "action"
+    confidence_threshold: 0.50
+
+# ── Ingestion ────────────────────────────────────────────────
+ingestion:
+  # Frame sampling: process every Nth frame per camera
+  # At 25fps with N=5 we process 5fps — enough for attribute capture
+  frame_skip: 5
+  # Max width to resize frames before pushing to queue (saves Redis mem)
+  max_frame_width: 1280
+  # JPEG quality for frame compression in queue
+  jpeg_quality: 85
+  # Reconnect delay (seconds) on RTSP failure
+  reconnect_delay: 5
+  # Worker threads per camera ingestor
+  threads_per_camera: 1
+
+# ── Detection / Tracking ─────────────────────────────────────
+detection:
+  # Min bbox area (pixels²) to bother processing a crop
+  min_bbox_area: 2500        # ~50×50px
+  # Max crops per frame (prevents GPU overload on crowded frames)
+  max_crops_per_frame: 20
+  # Track confirmation: only run attribute after N confirmed frames
+  track_confirm_frames: 3
+  # Re-run attribute every N frames for a confirmed track
+  attribute_refresh_frames: 30
+
+# ── Storage ──────────────────────────────────────────────────
+storage:
+  # Save frame thumbnail to disk (for UI display)
+  save_thumbnails: true
+  thumbnail_dir: "/tmp/thumbnails"
+  thumbnail_max_age_hours: 24
+  # Dedup: skip write if same track_id seen within this window (seconds)
+  dedup_window_seconds: 5
+
+# ── API Server ───────────────────────────────────────────────
+api:
+  host: "0.0.0.0"
+  port: ${API_PORT:-8000}
+  workers: 4
+  # JWT secret for future auth (not enforced in dev mode)
+  secret_key: ${API_SECRET:-dev-secret-change-me}
+  dev_mode: ${API_DEV_MODE:-true}
+  # Max query result size
+  max_results: 200
+  # Default result window for queries (seconds back in time)
+  default_search_window_seconds: 86400   # 1 day
+
+# ── Alert Engine ─────────────────────────────────────────────
+alerts:
+  # Cooldown: don't re-alert on same track within N seconds
+  cooldown_seconds: 60
+  # WebSocket broadcast batch size
+  ws_batch_size: 10
+
+# ── Logging ──────────────────────────────────────────────────
+logging:
+  level: "INFO"               # DEBUG | INFO | WARNING | ERROR
+  format: "json"              # "json" | "text"
+  log_dir: "/tmp/vap_logs"
+  rotate_mb: 50
+  backup_count: 5
+  # Per-module overrides
+  modules:
+    pipeline.detector_worker: "INFO"
+    pipeline.attribute_worker: "INFO"
+    api.api_server: "INFO"
+
+# ── Performance ──────────────────────────────────────────────
+performance:
+  # Number of parallel attribute worker processes
+  attribute_workers: 2
+  # Number of parallel storage worker processes
+  storage_workers: 2
+  # GPU memory fraction (leave headroom for detector + attr model)
+  gpu_memory_fraction: 0.85
+  # TensorRT optimisation (requires trtexec)
+  use_tensorrt: false

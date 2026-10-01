@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vision Attribute Pipeline — Search</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2e3347;
+    --accent: #4f8ef7; --accent2: #7c3aed; --success: #22c55e;
+    --warn: #f59e0b; --danger: #ef4444; --text: #e2e8f0;
+    --muted: #8892a4; --card: #1e2233;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif;
+         font-size: 14px; line-height: 1.6; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border);
+           padding: 16px 24px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 100; }
+  header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+  header .badge { background: var(--accent); color: #fff; padding: 2px 8px; border-radius: 12px;
+                  font-size: 11px; font-weight: 600; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); margin-left: auto; }
+  .status-dot.red { background: var(--danger); }
+  
+  .layout { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 57px); }
+  .sidebar { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; padding: 16px; }
+  .main { overflow-y: auto; padding: 20px; }
+
+  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted);
+       margin: 16px 0 8px; }
+  h3:first-child { margin-top: 0; }
+
+  .attr-group { margin-bottom: 12px; }
+  .attr-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .attr-group select, .attr-group input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 6px; font-size: 13px; outline: none;
+    transition: border-color 0.15s;
+  }
+  .attr-group select:focus, .attr-group input:focus { border-color: var(--accent); }
+
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+         border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 600;
+         transition: all 0.15s; }
+  .btn-primary { background: var(--accent); color: #fff; width: 100%; justify-content: center; }
+  .btn-primary:hover { background: #3b7de8; }
+  .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--accent); }
+  .btn-danger { background: rgba(239,68,68,0.15); color: var(--danger); border: 1px solid rgba(239,68,68,0.3); }
+  .btn-danger:hover { background: rgba(239,68,68,0.25); }
+  .btn-success { background: rgba(34,197,94,0.15); color: var(--success); border: 1px solid rgba(34,197,94,0.3); }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
+  .tab { padding: 8px 16px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px;
+         color: var(--muted); border: 1px solid transparent; border-bottom: none; margin-bottom: -1px; }
+  .tab.active { color: var(--text); background: var(--surface); border-color: var(--border); }
+
+  .panel { display: none; } .panel.active { display: block; }
+
+  .results-header { display: flex; align-items: center; justify-content: space-between;
+                    margin-bottom: 16px; }
+  .count-badge { background: var(--card); padding: 4px 12px; border-radius: 12px;
+                 font-size: 12px; color: var(--muted); }
+
+  .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .result-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+                 overflow: hidden; cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
+  .result-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .result-card img { width: 100%; height: 180px; object-fit: cover; background: var(--bg); display: block; }
+  .result-card .no-img { width: 100%; height: 180px; display: flex; align-items: center;
+                         justify-content: center; color: var(--muted); font-size: 28px; background: var(--bg); }
+  .result-card .card-body { padding: 10px; }
+  .result-card .camera { font-size: 11px; color: var(--accent); font-weight: 600; }
+  .result-card .time { font-size: 11px; color: var(--muted); }
+  .attr-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .chip { padding: 2px 6px; border-radius: 4px; font-size: 10px; background: rgba(79,142,247,0.15);
+          color: var(--accent); }
+  .chip.gender-male { background: rgba(124,58,237,0.15); color: #a78bfa; }
+  .chip.gender-female { background: rgba(236,72,153,0.15); color: #f9a8d4; }
+  .score-bar { height: 3px; background: var(--border); border-radius: 2px; margin-top: 8px; }
+  .score-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+
+  /* Alerts panel */
+  .alert-stream { height: calc(100vh - 200px); overflow-y: auto; }
+  .alert-item { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+                padding: 12px; margin-bottom: 8px; display: flex; gap: 12px; align-items: flex-start;
+                animation: slideIn 0.3s ease; }
+  .alert-item.new { border-color: var(--success); }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+  .alert-thumb { width: 60px; height: 80px; object-fit: cover; border-radius: 4px; flex-shrink: 0; background: var(--bg); }
+  .alert-info { flex: 1; }
+  .alert-title { font-weight: 600; font-size: 13px; }
+  .alert-meta { font-size: 11px; color: var(--muted); }
+  .alert-attrs { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+  .pulse { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+  .live-query-form { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+                     padding: 16px; margin-bottom: 16px; }
+  .query-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .query-row label { min-width: 100px; font-size: 12px; color: var(--muted); padding-top: 7px; }
+  .query-list { }
+  .query-item { background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+                padding: 10px 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .query-item .qid { font-family: monospace; font-size: 11px; color: var(--muted); }
+
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2);
+             border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty-state { text-align: center; padding: 48px; color: var(--muted); }
+  .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+  
+  #modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000;
+           align-items: center; justify-content: center; }
+  #modal.open { display: flex; }
+  #modal .modal-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+                      padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; }
+  #modal .modal-box img { width: 100%; border-radius: 6px; margin-bottom: 16px; }
+  #modal h2 { margin-bottom: 16px; font-size: 16px; }
+  .attr-table { width: 100%; border-collapse: collapse; }
+  .attr-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .attr-table td:first-child { color: var(--muted); width: 40%; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>🎯</div>
+  <h1>Vision Attribute Pipeline</h1>
+  <span class="badge">v1.0</span>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+    <span id="statusText" style="font-size:12px;color:var(--muted)">Connecting…</span>
+    <div class="status-dot" id="statusDot"></div>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- Sidebar: search controls -->
+  <div class="sidebar">
+    <h3>Search Filters</h3>
+
+    <div class="attr-group">
+      <label>Gender</label>
+      <select id="f_gender"><option value="">Any</option><option>male</option><option>female</option></select>
+    </div>
+    <div class="attr-group">
+      <label>Age Group</label>
+      <select id="f_age_group"><option value="">Any</option><option>young</option><option>adult</option><option>old</option></select>
+    </div>
+    <div class="attr-group">
+      <label>Upper Colour</label>
+      <select id="f_upper_color"><option value="">Any</option>
+        <option>black</option><option>white</option><option>red</option><option>blue</option>
+        <option>green</option><option>yellow</option><option>gray</option><option>purple</option>
+        <option>brown</option><option>pink</option><option>orange</option>
+      </select>
+    </div>
+    <div class="attr-group">
+      <label>Lower Colour</label>
+      <select id="f_lower_color"><option value="">Any</option>
+        <option>black</option><option>white</option><option>blue</option>
+        <option>gray</option><option>brown</option><option>green</option>
+      </select>
+    </div>
+    <div class="attr-group">
+      <label>Upper Type</label>
+      <select id="f_upper_type"><option value="">Any</option>
+        <option>tshirt</option><option>shirt</option><option>jacket</option>
+        <option>coat</option><option>dress</option><option>sweater</option><option>hoodie</option>
+      </select>
+    </div>
+    <div class="attr-group">
+      <label>Lower Type</label>
+      <select id="f_lower_type"><option value="">Any</option>
+        <option>pants</option><option>jeans</option><option>shorts</option>
+        <option>skirt</option><option>leggings</option>
+      </select>
+    </div>
+    <div class="attr-group">
+      <label>Glasses</label>
+      <select id="f_glasses"><option value="">Any</option><option>on</option><option>off</option></select>
+    </div>
+    <div class="attr-group">
+      <label>Hat</label>
+      <select id="f_hat"><option value="">Any</option><option>on</option><option>off</option></select>
+    </div>
+    <div class="attr-group">
+      <label>Bag Type</label>
+      <select id="f_bag_type"><option value="">Any</option>
+        <option>backpack</option><option>handbag</option><option>shoulder_bag</option><option>none</option>
+      </select>
+    </div>
+    <div class="attr-group">
+      <label>Action</label>
+      <select id="f_action"><option value="">Any</option>
+        <option>walking</option><option>standing</option><option>running</option>
+        <option>sitting</option><option>cycling</option>
+      </select>
+    </div>
+    <div class="attr-group">
+      <label>Time Window</label>
+      <select id="f_time">
+        <option value="1">Last 1 hour</option>
+        <option value="6">Last 6 hours</option>
+        <option value="24" selected>Last 24 hours</option>
+        <option value="72">Last 3 days</option>
+        <option value="168">Last 7 days</option>
+      </select>
+    </div>
+    <div class="attr-group">
+      <label>Camera ID (optional, comma-separated)</label>
+      <input type="text" id="f_cameras" placeholder="cam01, cam02…">
+    </div>
+    <div class="attr-group">
+      <label>Max Results</label>
+      <input type="number" id="f_limit" value="100" min="1" max="500">
+    </div>
+
+    <button class="btn btn-primary" id="searchBtn" onclick="runSearch()">
+      <span id="searchSpinner" style="display:none" class="spinner"></span>
+      🔍 Search
+    </button>
+  </div>
+
+  <!-- Main content -->
+  <div class="main">
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('results')">Search Results</div>
+      <div class="tab" onclick="showTab('live')">⚡ Live Alerts</div>
+    </div>
+
+    <!-- Results panel -->
+    <div id="panel-results" class="panel active">
+      <div class="results-header">
+        <div id="resultsTitle" style="font-weight:600">Run a search to see results</div>
+        <div class="count-badge" id="countBadge">0 results</div>
+      </div>
+      <div class="results-grid" id="resultsGrid">
+        <div class="empty-state" style="grid-column:1/-1">
+          <div class="icon">🔎</div>
+          <div>Select attributes and click Search</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live alerts panel -->
+    <div id="panel-live" class="panel">
+      <div class="live-query-form">
+        <h3 style="margin-top:0">Register Live Query</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <div class="attr-group">
+            <label>Attribute Key</label>
+            <select id="lq_key">
+              <option>upper_color</option><option>lower_color</option><option>glasses</option>
+              <option>hat</option><option>bag_type</option><option>gender</option>
+              <option>age_group</option><option>action</option>
+            </select>
+          </div>
+          <div class="attr-group">
+            <label>Attribute Value</label>
+            <input type="text" id="lq_val" placeholder="e.g. white">
+          </div>
+        </div>
+        <div class="attr-group" style="margin-bottom:8px">
+          <label>Description (optional)</label>
+          <input type="text" id="lq_desc" placeholder="e.g. Person in white shirt">
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-success" onclick="registerQuery()">➕ Register</button>
+          <button class="btn btn-secondary" onclick="loadQueries()">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div id="queryList" class="query-list"></div>
+
+      <h3>Incoming Alerts</h3>
+      <div id="alertsStream" class="alert-stream">
+        <div class="empty-state">
+          <div class="icon">📡</div>
+          <div>Register a live query to start receiving alerts</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div id="modal">
+  <div class="modal-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 id="modalTitle">Detection Detail</h2>
+      <button class="btn btn-secondary" onclick="closeModal()">✕</button>
+    </div>
+    <img id="modalImg" src="" alt="crop" style="display:none">
+    <table class="attr-table" id="modalTable"></table>
+  </div>
+</div>
+
+<script>
+const API = '';
+let activeQueryWS = null;
+let globalWS = null;
+let alertCount = 0;
+
+async function checkHealth() {
+  try {
+    const r = await fetch(`${API}/api/v1/health`);
+    const j = await r.json();
+    const ok = j.status === 'ok';
+    document.getElementById('statusDot').className = 'status-dot' + (ok ? '' : ' red');
+    document.getElementById('statusText').textContent = ok ? 'All systems OK' : 'Degraded';
+  } catch(e) {
+    document.getElementById('statusDot').className = 'status-dot red';
+    document.getElementById('statusText').textContent = 'Offline';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 15000);
+
+function getFilters() {
+  const fields = ['gender','age_group','upper_color','lower_color','upper_type','lower_type','glasses','hat','bag_type','action'];
+  const attrs = {};
+  fields.forEach(f => {
+    const v = document.getElementById('f_'+f)?.value;
+    if (v) attrs[f] = v;
+  });
+  return attrs;
+}
+
+async function runSearch() {
+  const btn = document.getElementById('searchBtn');
+  const spinner = document.getElementById('searchSpinner');
+  btn.disabled = true; spinner.style.display = 'inline-block';
+
+  const attrs = getFilters();
+  const hours = parseFloat(document.getElementById('f_time').value);
+  const limit = parseInt(document.getElementById('f_limit').value);
+  const camsStr = document.getElementById('f_cameras').value.trim();
+  const cams = camsStr ? camsStr.split(',').map(s=>s.trim()).filter(Boolean) : null;
+
+  try {
+    const body = {attributes: attrs, time_window_hours: hours, limit, camera_ids: cams};
+    const r = await fetch(`${API}/api/v1/search/attributes`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Search failed');
+    renderResults(data.results, data.count);
+    document.getElementById('resultsTitle').textContent =
+      `Results for: ${Object.entries(attrs).map(([k,v])=>`${k}=${v}`).join(', ') || 'all people'}`;
+    document.getElementById('countBadge').textContent = `${data.count} result${data.count!==1?'s':''}`;
+  } catch(e) {
+    alert('Search error: ' + e.message);
+  } finally {
+    btn.disabled = false; spinner.style.display = 'none';
+  }
+}
+
+function renderResults(results, count) {
+  const grid = document.getElementById('resultsGrid');
+  if (!results || results.length === 0) {
+    grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="icon">🚫</div><div>No matching detections found</div></div>';
+    return;
+  }
+  grid.innerHTML = results.map(r => `
+    <div class="result-card" onclick="showDetail(${JSON.stringify(r).replace(/"/g,'&quot;')})">
+      ${r.thumbnail_url
+        ? `<img src="${r.thumbnail_url}" alt="crop" loading="lazy">`
+        : `<div class="no-img">👤</div>`}
+      <div class="card-body">
+        <div class="camera">${r.camera_id}</div>
+        <div class="time">${r.datetime_utc ? new Date(r.datetime_utc).toLocaleTimeString() : ''}</div>
+        <div class="attr-chips">
+          ${Object.entries(r.attributes||{}).slice(0,4).map(([k,v])=>
+            `<span class="chip ${k==='gender'?'gender-'+v:''}">${v}</span>`
+          ).join('')}
+        </div>
+        <div class="score-bar"><div class="score-fill" style="width:${Math.round(r.score*100)}%"></div></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function showDetail(r) {
+  document.getElementById('modalTitle').textContent = `Track: ${r.track_id}`;
+  const img = document.getElementById('modalImg');
+  if (r.thumbnail_url) { img.src = r.thumbnail_url; img.style.display = 'block'; }
+  else { img.style.display = 'none'; }
+  const rows = [
+    ['Camera', r.camera_id], ['Track ID', r.track_id],
+    ['Time', r.datetime_utc ? new Date(r.datetime_utc).toLocaleString() : r.timestamp],
+    ['Confidence', r.confidence ? (r.confidence*100).toFixed(1)+'%' : '—'],
+    ['Similarity', r.score !== 1 ? (r.score*100).toFixed(1)+'%' : '—'],
+    ...Object.entries(r.attributes||{}).map(([k,v])=>[k,v]),
+  ];
+  document.getElementById('modalTable').innerHTML = rows.map(([k,v])=>
+    `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+document.getElementById('modal').addEventListener('click', e => { if(e.target===e.currentTarget) closeModal(); });
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    t.classList.toggle('active', ['results','live'][i]===name);
+  });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  if (name === 'live') { loadQueries(); connectGlobalWS(); }
+}
+
+async function registerQuery() {
+  const key = document.getElementById('lq_key').value;
+  const val = document.getElementById('lq_val').value.trim();
+  const desc = document.getElementById('lq_desc').value.trim();
+  if (!val) { alert('Enter a value'); return; }
+  const r = await fetch(`${API}/api/v1/live-queries`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({attributes:{[key]:val}, description:desc})
+  });
+  const d = await r.json();
+  if (!r.ok) { alert('Error: '+d.detail); return; }
+  alert(`Query registered! ID: ${d.query_id}`);
+  loadQueries();
+}
+
+async function loadQueries() {
+  const r = await fetch(`${API}/api/v1/live-queries`);
+  const d = await r.json();
+  const list = document.getElementById('queryList');
+  if (!d.queries || d.queries.length === 0) {
+    list.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px">No active queries</div>';
+    return;
+  }
+  list.innerHTML = d.queries.map(q => `
+    <div class="query-item">
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:600">${q.description||'Live Query'}</div>
+        <div class="qid">${q.query_id.slice(0,16)}…</div>
+        <div class="attr-chips" style="margin-top:4px">
+          ${Object.entries(q.attributes||{}).map(([k,v])=>`<span class="chip">${k}=${v}</span>`).join('')}
+        </div>
+      </div>
+      <button class="btn btn-danger" style="padding:4px 8px;font-size:11px" onclick="deleteQuery('${q.query_id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+async function deleteQuery(qid) {
+  await fetch(`${API}/api/v1/live-queries/${qid}`, {method:'DELETE'});
+  loadQueries();
+}
+
+function connectGlobalWS() {
+  if (globalWS && globalWS.readyState === WebSocket.OPEN) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  globalWS = new WebSocket(`${proto}//${location.host}/ws/alerts/global`);
+  globalWS.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'subscribed') return;
+    addAlert(d);
+  };
+  globalWS.onclose = () => setTimeout(connectGlobalWS, 3000);
+}
+
+function addAlert(alert) {
+  alertCount++;
+  const stream = document.getElementById('alertsStream');
+  if (stream.querySelector('.empty-state')) stream.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'alert-item new';
+  el.innerHTML = `
+    ${alert.thumbnail_url
+      ? `<img class="alert-thumb" src="${alert.thumbnail_url}" alt="">`
+      : `<div class="alert-thumb" style="display:flex;align-items:center;justify-content:center;font-size:24px;background:var(--bg)">👤</div>`}
+    <div class="alert-info">
+      <div class="alert-title">📍 ${alert.camera_id}</div>
+      <div class="alert-meta">${new Date(alert.timestamp).toLocaleTimeString()} · Track: ${(alert.track_id||'').slice(-8)}</div>
+      <div class="alert-attrs">
+        ${Object.entries(alert.attributes||{}).slice(0,5).map(([k,v])=>`<span class="chip">${k}=${v}</span>`).join('')}
+      </div>
+    </div>
+  `;
+  stream.prepend(el);
+  setTimeout(() => el.classList.remove('new'), 2000);
+  // Keep max 100 alerts
+  while (stream.children.length > 100) stream.removeChild(stream.lastChild);
+}
+</script>
+</body>
+</html>
