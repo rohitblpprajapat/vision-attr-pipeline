@@ -1,8 +1,8 @@
 # Vision Attribute Pipeline (VAP)
 
-**Production-grade multi-camera pedestrian attribute recognition and search engine.**
+**Multi-camera pedestrian attribute recognition and search engine.**
 
-Combines real-time person detection, Re-Identification (ReID) embeddings, and Pedestrian Attribute Recognition (PAR) across 50+ concurrent camera streams. Supports sub-second attribute queries and live alerting.
+Combines real-time person detection, Re-Identification (ReID) embeddings, and Pedestrian Attribute Recognition (PAR) across multiple concurrent camera streams (8–10 RTSP streams per T4 GPU). Supports sub-second attribute queries and live alerting.
 
 ---
 
